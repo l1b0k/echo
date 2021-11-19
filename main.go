@@ -26,6 +26,7 @@ import (
 	"fmt"
 	"math/big"
 	rd "math/rand"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -42,6 +43,26 @@ func getPodInfo() string {
 		podInfo = fmt.Sprintf("%s %s/%s\n", os.Getenv("K8S_NODE_NAME"), os.Getenv("K8S_POD_NAME"), os.Getenv("K8S_POD_NAMESPACE"))
 	})
 	return podInfo
+}
+
+func getLocalAddrs() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return err.Error()
+	}
+	var s []string
+	for _, a := range addrs {
+		ipNet, ok := a.(*net.IPNet)
+		if !ok {
+			continue
+		}
+
+		if !ipNet.IP.IsGlobalUnicast() {
+			continue
+		}
+		s = append(s, a.String())
+	}
+	return strings.Join(s, ",")
 }
 
 func main() {
@@ -111,6 +132,8 @@ func echo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "text/plain")
 	fmt.Fprintf(w, "%s %s\n", r.Method, r.URL)
 	fmt.Fprintf(w, "Host: %s\n", r.Host)
+	fmt.Fprintf(w, "RemoteAddr: %s\n", r.RemoteAddr)
+	fmt.Fprintf(w, "LocalAddr: %s\n", getLocalAddrs())
 
 	fmt.Fprintf(w, getPodInfo())
 

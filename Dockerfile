@@ -1,4 +1,4 @@
-FROM golang:1.17.1 as builder
+FROM golang:1.17.2 as builder
 WORKDIR /go/src/github.com/l1b0k/echo/
 COPY . .
 RUN CGO_ENABLED=0 go build -ldflags "-X \"main.gitCommit=`git rev-parse --short HEAD 2>/dev/null`\" -X \"main.buildDate=$(date -u +'%Y-%m-%dT%H:%M:%SZ') \" " -o echo .
