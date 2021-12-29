@@ -23,6 +23,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"flag"
 	"fmt"
 	"math/big"
 	rd "math/rand"
@@ -65,7 +66,18 @@ func getLocalAddrs() string {
 	return strings.Join(s, ",")
 }
 
+var (
+	httpBindAddress  string
+	httpsBindAddress string
+)
+
+func init() {
+	flag.StringVar(&httpBindAddress, "http-bind-address", ":80", "HTTP bind address")
+	flag.StringVar(&httpsBindAddress, "https-bind-address", ":443", "HTTPS bind address")
+}
+
 func main() {
+	flag.Parse()
 	gen()
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {})
 	http.HandleFunc("/version", version)
@@ -75,10 +87,10 @@ func main() {
 
 	ch := make(chan error)
 	go func() {
-		ch <- http.ListenAndServe(":80", nil)
+		ch <- http.ListenAndServe(httpBindAddress, nil)
 	}()
 	go func() {
-		ch <- http.ListenAndServeTLS(":443", "ca.pem", "ca-key.pem", nil)
+		ch <- http.ListenAndServeTLS(httpsBindAddress, "ca.pem", "ca-key.pem", nil)
 	}()
 
 	select {
