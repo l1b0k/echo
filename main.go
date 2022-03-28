@@ -29,8 +29,10 @@ import (
 	rd "math/rand"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -38,6 +40,11 @@ import (
 
 var once sync.Once
 var podInfo string
+
+const (
+	ExitCodeArgsErr = 10
+	ExitCodeTimeout = 11
+)
 
 func getPodInfo() string {
 	once.Do(func() {
@@ -67,35 +74,45 @@ func getLocalAddrs() string {
 }
 
 var (
+	mode             string // run mode server or client
+	cases            string // run mode server or client
 	httpBindAddress  string
 	httpsBindAddress string
 )
 
 func init() {
+	flag.StringVar(&mode, "mode", "server", "default as an HTTP/S Server")
+	flag.StringVar(&cases, "cases", "", "comma separated list. dns://127.0.0.1:53,http://127.0.0.1:80,https://127.0.0.1:443")
 	flag.StringVar(&httpBindAddress, "http-bind-address", ":80", "HTTP bind address")
 	flag.StringVar(&httpsBindAddress, "https-bind-address", ":443", "HTTPS bind address")
 }
 
 func main() {
 	flag.Parse()
-	gen()
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {})
-	http.HandleFunc("/version", version)
-	http.HandleFunc("/echo", echo)
-	fs := http.FileServer(http.Dir("static/"))
-	http.Handle("/static/", http.StripPrefix("/static/", fs))
 
-	ch := make(chan error)
-	go func() {
-		ch <- http.ListenAndServe(httpBindAddress, nil)
-	}()
-	go func() {
-		ch <- http.ListenAndServeTLS(httpsBindAddress, "ca.pem", "ca-key.pem", nil)
-	}()
+	switch mode {
+	case "client":
+		handleCases()
+	default:
+		gen()
+		http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {})
+		http.HandleFunc("/version", version)
+		http.HandleFunc("/echo", echo)
+		fs := http.FileServer(http.Dir("static/"))
+		http.Handle("/static/", http.StripPrefix("/static/", fs))
 
-	select {
-	case err := <-ch:
-		println(err.Error())
+		ch := make(chan error)
+		go func() {
+			ch <- http.ListenAndServe(httpBindAddress, nil)
+		}()
+		go func() {
+			ch <- http.ListenAndServeTLS(httpsBindAddress, "ca.pem", "ca-key.pem", nil)
+		}()
+
+		select {
+		case err := <-ch:
+			println(err.Error())
+		}
 	}
 }
 
@@ -183,6 +200,84 @@ func echo(w http.ResponseWriter, r *http.Request) {
 	for _, str := range headers {
 		fmt.Fprintf(w, str)
 	}
+}
+
+func handleCases() {
+	for _, c := range strings.Split(cases, ",") {
+		u, err := url.Parse(c)
+		if err != nil {
+			os.Exit(ExitCodeArgsErr)
+		}
+		switch u.Scheme {
+		case "tcp":
+			host, portStr, err := net.SplitHostPort(u.Host)
+			if err != nil {
+				os.Exit(ExitCodeArgsErr)
+			}
+			port, err := strconv.Atoi(portStr)
+			if err != nil {
+				os.Exit(ExitCodeArgsErr)
+			}
+			err = retry(func() (bool, error) {
+				dial, err := net.DialTCP(u.Scheme, nil, &net.TCPAddr{
+					IP:   net.ParseIP(host),
+					Port: port,
+				})
+				if err != nil {
+					return false, nil
+				}
+				_ = dial.Close()
+				return true, nil
+			})
+			if err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "dial %s %s", u.String(), err)
+				os.Exit(ExitCodeTimeout)
+			}
+		case "http", "https":
+			err = retry(func() (bool, error) {
+				resp, err := http.Get(u.String())
+				if err != nil {
+					return false, nil
+				}
+				if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+					return true, nil
+				}
+				return false, nil
+			})
+			if err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "dial %s %s", u.String(), err)
+				os.Exit(ExitCodeTimeout)
+			}
+		case "dns":
+			err = retry(func() (bool, error) {
+				_, err := net.LookupIP(u.Host)
+				if err != nil {
+					return false, nil
+				}
+				return true, nil
+			})
+			if err != nil {
+				_, _ = fmt.Fprintf(os.Stderr, "dial %s %s", u.String(), err)
+				os.Exit(ExitCodeTimeout)
+			}
+		}
+	}
+}
+
+func retry(f func() (bool, error)) error {
+	for i := 0; i < 5; i++ {
+		ok, err := f()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		return nil
+	}
+
+	return fmt.Errorf("time out")
 }
 
 var (
